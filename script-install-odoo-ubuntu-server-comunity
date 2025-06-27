@@ -1,0 +1,75 @@
+#!/bin/bash
+set -e
+
+echo "🔧 Actualizando sistema..."
+sudo apt update && sudo apt upgrade -y
+
+echo "📦 Instalando dependencias base..."
+sudo apt install -y git python3-pip build-essential wget python3-dev python3-venv \
+libxslt-dev libzip-dev libldap2-dev libsasl2-dev python3-setuptools \
+node-less libjpeg-dev libpq-dev libxml2-dev libffi-dev libssl-dev \
+libjpeg8-dev liblcms2-dev libblas-dev libatlas-base-dev \
+npm curl xfonts-75dpi postgresql fontconfig xfonts-base
+
+echo "🧹 Reparando paquetes rotos (si existen)..."
+sudo apt --fix-broken install -y
+
+echo "🗃️ Creando usuario PostgreSQL para Odoo..."
+sudo -u postgres psql -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'odoo18') THEN CREATE ROLE odoo18 WITH SUPERUSER LOGIN PASSWORD 'odoo18'; END IF; END \$\$;"
+
+echo "📥 Descargando wkhtmltopdf compatible..."
+sudo apt-get install -y wget xfonts-75dpi
+wget -q https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb
+sudo dpkg -i wkhtmltox_0.12.6.1-2.jammy_amd64.deb
+
+
+echo "👤 Creando usuario y directorio para Odoo..."
+sudo adduser --system --home=/opt/odoo --group odoo
+sudo mkdir -p /opt/odoo
+sudo chown -R odoo:odoo /opt/odoo
+sudo usermod -s /bin/bash odoo
+
+echo "📁 Clonando Odoo 18..."
+sudo -u odoo -H git clone https://www.github.com/odoo/odoo.git --branch=18.0 --depth=1 /opt/odoo/odoo
+
+echo "🐍 Configurando entorno virtual Python..."
+sudo su - odoo <<EOF
+cd /opt/odoo/odoo
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip wheel
+pip install -r requirements.txt
+python setup.py install > /tmp/odoo_install.log 2>&1
+deactivate
+EOF
+
+echo "🛠️ Creando archivo de configuración..."
+cat <<EOF | sudo tee /opt/odoo/odoo18.conf > /dev/null
+[options]
+addons_path = /opt/odoo/odoo/addons
+db_host = localhost
+db_port = 5432
+db_user = odoo18
+db_password = odoo18
+admin_passwd = admin
+http_port = 8069
+EOF
+
+sudo chown odoo:odoo /opt/odoo/odoo18.conf
+
+echo "🔍 Verificando instalación de wkhtmltopdf..."
+if wkhtmltopdf --version; then
+  echo "✅ wkhtmltopdf instalado correctamente."
+else
+  echo "❌ wkhtmltopdf no se instaló correctamente." >&2
+  exit 1
+fi
+
+echo "🚀 Iniciando Odoo como usuario odoo..."
+sudo su - odoo <<EOF
+cd /opt/odoo/odoo
+source venv/bin/activate
+cd ..
+./odoo/odoo-bin -c /opt/odoo/odoo18.conf
+EOF
+
